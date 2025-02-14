@@ -1,3 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "repo_keeper"
+version = "0.1.0"
+authors = [
+    { name = "Shiyuan Li", email = "lizhicuo2020@gmail.com" },
+]
+description = "A tool to manage repository information"
+requires-python = ">=3.12"
+dependencies = [
+
+]
+
 [tool.black]
 line-length = 79
 target-version = ["py312"]

@@ -1,9 +1,19 @@
-from dataclasses import dataclass
-from typing import List, Optional
+from dataclasses import dataclass, field
+from typing import List, Optional, Dict
 from datetime import datetime
+import os
+from ..utils import *
 
-from ..utils import examine_path, get_all_folders, get_all_files
-from ..errors import RepoUpdateError
+from ..errors import *
+
+@dataclass
+class Content:
+    """
+    Represents the content of a file.
+    """
+    content: str
+    file: Optional["File"] = None
+    folder: Optional["Folder"] = None
 
 @dataclass
 class File:
@@ -16,21 +26,42 @@ class File:
         last_modified: Last modification timestamp
         content: Optional file content
 
-    Returns:
-        File object
-
     Raises:
-        ValueError: If path or name is empty
+        FileUpdateError
+        ContentUpdateError
     """
 
     name: str
+    folder: Optional["Folder"] = None
     size: int
     last_modified: datetime
-    content: Optional[str] = None
+    content: Optional[Content] = None
+
+    @exception_handler(FileUpdateError)
+    def update_file(
+        self,
+        new_name: Optional[str] = None,
+        new_size: Optional[int] = None,
+        new_last_modified: Optional[datetime] = None,
+        modify_content: Optional[bool] = False,
+    ):
+        if new_name:
+            self.name = new_name
+        if new_size:
+            self.size = new_size
+        if new_last_modified:
+            self.last_modified = new_last_modified
+        if modify_content:
+            self.update_content(self.path)
+
+    @exception_handler(ContentUpdateError)
+    def update_content(self):
+        path = os.path.join(self.folder.path, self.name)
+        self.content = Content(get_file_content(path))
 
     def __post_init__(self):
         if not self.name:
-            raise ValueError("Name must not be empty")
+            raise FileUpdateError("Name must not be empty")
 
 
 @dataclass
@@ -40,8 +71,8 @@ class Folder:
     Args:
         name: Folder name
         path: Full path to folder
-        files: List of File objects
-        subfolders: List of Folder objects
+        files: Dict mapping filename to File objects
+        subfolders: Dict mapping folder name to Folder objects
 
     Returns:
         Folder object
@@ -49,23 +80,82 @@ class Folder:
     Raises:
         ValueError: If path or name is empty
     """
-
     name: str
     path: str
-    files: List[File] = []
-    subfolders: List["Folder"] = []
+    files: Dict[str, File] = field(default_factory=dict)
+    subfolders: Dict[str, "Folder"] = field(default_factory=dict)
+    last_modified: Optional[datetime] = None
 
+    @exception_handler(FileUpdateError)
     def update_folder(self):
-        self.files = get_all_files(self.path)
-        self.subfolders = get_all_folders(self.path)
-        for subfolder in self.subfolders:
-            subfolder.update_folder()
+        """
+        Updates the folder by checking for new or modified files and subfolders.
+        """
+        # update files
+        files_list = get_all_files(self.path)
+        for file_name in files_list:
+            file_path = os.path.join(self.path, file_name)
+            file_size = os.path.getsize(file_path)
+            last_modified_date = get_last_modified_date(file_path)
+            if file_name in self.files and last_modified_date == self.files[file_name].last_modified:
+                continue
+            elif file_name not in self.files:
+                file_size = os.path.getsize(file_path)
+                last_modified = get_last_modified_date(file_path)
+                self.files[file_name] = File(
+                    name=file_name, 
+                    folder=self,
+                    size=file_size,
+                    last_modified=last_modified,
+                    content=get_file_content(file_path)
+                )
+            elif file_size != self.files[file_name].size:
+                self.files[file_name].update_file(
+                    new_size=file_size,
+                    new_last_modified=last_modified,
+                    modify_content=True,
+                )
+        # update subfolders
+        folder_list = get_all_folders(self.path)
+        for folder_name in folder_list:
+            folder_path = os.path.join(self.path, folder_name)
+            modified_date = get_last_modified_date(folder_path)
+            if folder_name not in self.subfolders:
+                self.subfolders[folder_name] = Folder(
+                    name=folder_name,
+                    path=folder_path,
+                    last_modified=modified_date
+                )
+            
+            if modified_date != self.subfolders[folder_name].last_modified:
+                self.subfolders[folder_name].update_folder()
+
+    def get_file(self, filename: str) -> Optional[File]:
+        """Get a File object by its filename.
+
+        Args:
+            filename: Name of the file to retrieve
+
+        Returns:
+            File object if found, None otherwise
+        """
+        return self.files.get(filename)
+
+    def get_subfolder(self, folder_name: str) -> Optional["Folder"]:
+        """Get a Folder object by its name.
+
+        Args:
+            folder_name: Name of the folder to retrieve
+
+        Returns:
+            Folder object if found, None otherwise
+        """
+        return self.subfolders.get(folder_name)
 
     def __post_init__(self):
         if not self.path or not self.name:
-            raise ValueError("Path and name must not be empty")
-        self.files = self.files or []
-        self.subfolders = self.subfolders or []
+            raise FileUpdateError("Path and name must not be empty")
+
 
 
 @dataclass
@@ -109,7 +199,7 @@ class GithubRepo:
     
     def __post_init__(self):
         if not self.name or not self.root_folder:
-            raise ValueError("Repository name and root_folder must not be empty")
+            raise RepoUpdateError("Repository name and root_folder must not be empty")
 
 
 # Delete later
@@ -120,7 +210,7 @@ if __name__ == "__main__":
         name="example.txt", 
         size=1024,
         last_modified=datetime.now(),
-        
+        folder=example_folder,
     )  # File object with name and size
     example_subfolder = Folder(
         name="subfolder", path="/path/to/subfolder"
